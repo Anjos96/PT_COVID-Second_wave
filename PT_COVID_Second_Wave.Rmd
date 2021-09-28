@@ -1,0 +1,634 @@
+---
+title: "Relatorio_Diagnosticos"
+author: Autores
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_caption: yes
+    force_captions: yes
+    highlight: pygments
+    number_sections: yes
+    theme: simplex
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+    # include:
+    #   after_body: footer_test.html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r include=FALSE}
+ipak <- function(pkg){
+    new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+    if (length(new.pkg))
+        install.packages(new.pkg, dependencies = TRUE)
+    sapply(pkg, require, character.only = TRUE)
+}
+
+packages <- c("data.table",
+              "magrittr",
+              "lubridate",
+              "tsModel",
+              "ggplot2",
+              "car",
+              "forecast",
+              "AER",
+              "MASS",
+              "tseries",
+              "reactable",
+              "magrittr",
+              "patchwork"
+)
+library(dplyr, warn.conflicts = FALSE)
+
+ipak(packages)
+rm(list = ls())
+```
+
+
+```{r}
+# Load datasets
+daily_cases <- fread("Cases_DT.csv", encoding = "UTF-8")
+index_complete <- fread("covid-stringency-index.csv", encoding = "UTF-8")
+daily_deaths <- fread("Deaths_DT.csv", encoding = "UTF-8")
+```
+
+
+
+
+```{r}
+# Define the dates where intervention was implemented
+two_levels <- as.Date("2020-11-04")
+four_levels <- as.Date("2020-11-24")
+
+# Define dates for start and end of time series
+start <- as.Date("2020-08-30")
+end <- as.Date("2020-12-20")
+
+# Daily deaths
+## Creating the daily tests variable with appropriate lag
+daily_cases$daily_testes_lag1 <- Lag(daily_cases$daily_testes, 1)
+
+## Subsetting the dataframe
+daily_cases <- daily_cases[daily_cases$day>=start & daily_cases$day<end,]
+
+
+
+# Stringengy Index
+## Subsetting the data and creating the index variable with appropriate lag
+index <- index_complete %>% 
+          mutate(Date = ymd(Date)) %>%
+          filter(Entity == "Portugal") %>%
+          mutate(index_lag20 = Lag(stringency_index, 20)) %>%
+          filter(Date >= start,
+                 Date < end) %>%
+          dplyr::select(index_lag20)
+
+
+# Deaths
+daily_deaths <- daily_deaths %>%
+                  mutate(daily_deaths_lag2 = Lag(daily_deaths, 2)) %>%
+                  filter(day >= start,
+                         day < end) %>%
+                  dplyr::select(daily_deaths, daily_deaths_lag2)
+
+
+# Juntion
+dt <- cbind(daily_cases, index, daily_deaths)
+setDT(dt)
+
+
+# Create categorical variable for in week seasanality in daily diagnostics
+dt$week <- rep(1:7, nrow(dt)/7)
+
+# Create continuos variable for time
+dt$time <- 1:nrow(dt)
+
+# Create categorical variable for intervention with appropriate lag
+## For Daily Diagnostics
+dt$int_cases <- 0 
+dt$int_cases[dt$day>two_levels + 12] <- 1
+dt$int_cases <- as.factor(dt$int_cases)
+
+## For Daily Deaths
+dt$int_deaths <- 0 
+dt$int_deaths[dt$day>two_levels + 20] <- 1
+dt$int_deaths <- as.factor(dt$int_deaths)
+```
+
+# Daily Diagnostics
+
+## Time Series Plot
+
+```{r}
+labelos <- c("1.Set",
+             "1.Out",
+             "1.Nov",
+             "1.Dez")
+
+p1 <- ggplot(dt, aes(time, daily_Diagnostics)) +
+        geom_line() +
+        geom_vline(aes(xintercept = time[day==two_levels], color = "Two Risk Levels"), 
+                   linetype = "dashed") +
+#        theme(legend.position="bottom") +
+        scale_color_manual(name = "Intervention", 
+                           values = c(`Two Risk Levels` = "red")) +
+        scale_x_continuous(breaks = dt$time[grepl("01", dt$day, fixed = TRUE)],
+                           labels = labelos) +
+        labs(title = "Daily COVID-19 diagnosis Interventions",
+             subtitle = "From August 30th to December 19th",
+             y = "Daily Diagnosis",
+             x = "") +
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+              panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+        guides(color = guide_legend(reverse = T))
+
+
+p2 <- ggplot(dt, aes(time, daily_Diagnostics)) +
+        geom_line() +
+        geom_vline(aes(xintercept = time[day==two_levels + 12], color = "Two Risk Levels"), 
+                   linetype = "dashed") +
+        theme(legend.position="bottom") +
+        scale_color_manual(name = "Intervention", 
+                           values = c(`Two Risk Levels` = "red")) +
+        scale_x_continuous(breaks = dt$time[grepl("01", dt$day, fixed = TRUE)],
+                           labels = labelos) +
+        labs(title = "With 12 day lag Intervention",
+             subtitle = "",
+             y = "",
+             x = "") +
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+              panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+        guides(color = guide_legend(reverse = T))
+
+p1 + p2 + plot_layout(guides = "collect") & theme(legend.position = 'bottom') 
+
+      
+```
+
+```{r}
+p1 <- ggplot(dt, aes(time, log(daily_Diagnostics, base = 10))) +
+        geom_line() +
+        geom_vline(aes(xintercept = time[day==two_levels], color = "Two Risk Levels"), 
+                   linetype = "dashed") +
+#        theme(legend.position="bottom") +
+        scale_color_manual(name = "Intervention", 
+                           values = c(`Two Risk Levels` = "red")) +
+        scale_x_continuous(breaks = dt$time[grepl("01", dt$day, fixed = TRUE)],
+                           labels = labelos) +
+        labs(title = "Daily COVID-19 diagnosis Interventions",
+             subtitle = "From August 30th to December 19th",
+             y = expression(log[10](Daily~Diagnostics)),
+             x = "") +
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+              panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+        guides(color = guide_legend(reverse = T))
+
+
+p2 <- ggplot(dt, aes(time, log(daily_Diagnostics, base = 10))) +
+        geom_line() +
+        geom_vline(aes(xintercept = time[day==two_levels + 12], color = "Two Risk Levels"), 
+                   linetype = "dashed") +
+        theme(legend.position="bottom") +
+        scale_color_manual(name = "Intervention", 
+                           values = c(`Two Risk Levels` = "red")) +
+        scale_x_continuous(breaks = dt$time[grepl("01", dt$day, fixed = TRUE)],
+                           labels = labelos) +
+        labs(title = "With 12 day lag Intervention",
+             subtitle = "",
+             y = "",
+             x = "") +
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+              panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+        guides(color = guide_legend(reverse = T))
+
+p1 + p2 + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
+```
+
+## Model Definition
+
+```{r}
+# Com base no paper
+covar <- matrix(c(as.numeric(as.character(dt$int_cases)),
+                  dt$time,
+                  as.numeric(as.character(dt$int_cases))*dt$time,
+                  log(dt$daily_testes_lag1, base = 10),
+                  harmonic(dt$week,3,7)), ncol = 10, nrow = nrow(dt))
+
+cases_ts <- ts(dt$daily_Diagnostics)
+
+
+arima_model <- auto.arima(log(cases_ts, base = 10), xreg = covar, stepwise = F, approximation = F, trace = F, seasonal = F)
+
+summary(arima_model)
+```
+
+In which:
+
+ + *xreg1* is the Intervention Variable;
+ 
+ + *xreg2* is the time variable;
+ 
+ + *xreg3* is the interation term;
+ 
+ + *xreg4* is the logarithmic transformed variable for daily number of tests with a lag of 1 day;
+ 
+ + and the rest of *xreg* variables are sine/cosine pares.
+
+## Model Check
+
+```{r}
+checkresiduals(arima_model)
+coeftest(arima_model)
+```
+
+
+```{r}
+arima_residuals <- residuals(arima_model, type = "innovation")
+
+ggAcf(arima_residuals, lag.max = length(arima_model$residuals)) + 
+  theme_classic() +
+  labs(title = "ACF for Linear Regression with ARIMA errors")
+```
+
+```{r}
+# Test on the only lag that seems to have significant autocorrelation
+Box.test(arima_residuals, lag = 15, type = "Ljung")
+```
+
+
+```{r}
+# Adjusting the same order model to the data previous to the intervention
+## Remove columns 1 and 3 as they are for the intervention variable
+covar_no_int <- covar[1:length(dt$int_cases[dt$int_cases==0]),-c(1,3)]
+
+cases_ts_no_int <- ts(dt$daily_Diagnostics[dt$int_cases==0])
+
+arima_model_no_int <- arima(log(cases_ts_no_int, base = 10), order=c(1,0,1), xreg = covar_no_int)
+
+# Predition for the model without pos intervention data
+## Variables for pos intervention data
+covar_pos_int <- covar[79:112,-c(1,3)]  
+
+## Prediction
+fc <- predict(arima_model_no_int, h = 112-length(cases_ts_no_int), newxreg = covar_pos_int)
+
+cases_no_int <- c(rep(NA, length(cases_ts_no_int)-1), fc$pred)
+
+# Fitted values for complet model
+cases_int <- arima_model$fitted
+
+
+ggplot(dt) +
+  geom_point(aes(time, log(dt$daily_Diagnostics, base = 10))) +
+  geom_line(aes(time, cases_no_int, colour = "black")) +
+  geom_line(aes(time, cases_int, colour = "green")) +
+  labs(title = "Daily COVID-19 diagnosis with and wihout intervention",
+       subtitle = "",
+       x = "",
+       y = expression(log[10](Daily~Diagnostics)),
+       colour = "")  +
+  scale_color_manual(values = c("red",
+                                "blue"),
+                     labels = c("Predicted values with no intervention","Regression fitted values")) +
+  theme_classic() +
+  theme(legend.position="bottom") +
+  geom_vline(aes(xintercept = time[day==two_levels+12]), 
+             linetype = "dashed") +
+  scale_x_continuous(breaks = dt$time[grepl("01", dt$day, fixed = TRUE)],
+                     labels = labelos) 
+```
+
+
+
+## Backtransformation
+
+```{r}
+# Backtransformation
+k <- log10(exp(1))
+
+cases_int_backtrasformed <- exp(cases_int/k + arima_model$sigma2/(2*k^2))
+
+#cases_int_backtrasformed <-  10^(cases_int + (sum(arima_log_residuals^2)/(112-k)/2))
+
+
+ggplot(dt, aes(time, daily_Diagnostics)) +
+  geom_line(aes(colour = "Observados")) +
+  geom_line(aes(time, cases_int_backtrasformed, colour = "normal")) +
+  labs(colour = "Métodos",
+       title = "Fitted Values",
+       subtitle = "Linear Regression with ARIMA errors",
+       x = "",
+       y = "Daily Diagnostics") +
+  scale_color_manual(values = c("red",
+                                "blue"),
+                     labels = c("Backtransformed Fitted Values",
+                                "Observed")) +
+  theme_classic() +
+  theme(legend.position="bottom") 
+```
+
+```{r}
+# Backtransformation
+cases_no_int_backtrasformed <- exp(cases_no_int/k + arima_model_no_int$sigma2/(2*k^2))
+
+
+ggplot(dt, aes(time, daily_Diagnostics)) +
+  geom_line(aes(colour = "Observados")) +
+  geom_line(aes(time, cases_no_int_backtrasformed, colour = "normal")) +
+  labs(colour = "Métodos",
+       title = "Predicted Values for a no intervention scenario",
+       subtitle = "Linear Regression with ARIMA errors",
+       x = "",
+       y = "Daily Diagnostics") +
+  scale_color_manual(values = c("red",
+                                "blue"),
+                     labels = c("Backtransformed Predicted Values",
+                                "Observed")) +
+  theme_classic() +
+  theme(legend.position="bottom") 
+```
+
+
+# Daily Deaths
+
+## Time Series Plot
+
+```{r}
+p1 <- ggplot(dt, aes(time, daily_deaths)) +
+        geom_line() +
+        geom_vline(aes(xintercept = time[day==two_levels], color = "Two Risk Levels"), 
+                   linetype = "dashed") +
+#        theme(legend.position="bottom") +
+        scale_color_manual(name = "Intervention", 
+                           values = c(`Two Risk Levels` = "red")) +
+        scale_x_continuous(breaks = dt$time[grepl("01", dt$day, fixed = TRUE)],
+                           labels = labelos) +
+        labs(title = "Daily COVID-19 deaths Interventions",
+             subtitle = "From August 30th to December 19th",
+             y = "Daily Deaths",
+             x = "") +
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+              panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+        guides(color = guide_legend(reverse = T))
+
+
+p2 <- ggplot(dt, aes(time, daily_deaths)) +
+        geom_line() +
+        geom_vline(aes(xintercept = time[day==two_levels + 20], color = "Two Risk Levels"), 
+                   linetype = "dashed") +
+        theme(legend.position="bottom") +
+        scale_color_manual(name = "Intervention", 
+                           values = c(`Two Risk Levels` = "red")) +
+        scale_x_continuous(breaks = dt$time[grepl("01", dt$day, fixed = TRUE)],
+                           labels = labelos) +
+        labs(title = "With 20 day lag Intervention",
+             subtitle = "",
+             y = "",
+             x = "") +
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+              panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+        guides(color = guide_legend(reverse = T))
+
+p1 + p2 + plot_layout(guides = "collect") & theme(legend.position = 'bottom') 
+
+```
+
+## Model Definition
+
+```{r}
+qpoi_deaths_model <- glm(daily_deaths ~ int_deaths + time + int_deaths*time + index_lag20 + daily_deaths_lag2, family = quasipoisson(), data = dt)
+
+summary(qpoi_deaths_model)
+```
+
+```{r}
+# Fitted values
+deaths_int <- fitted(qpoi_deaths_model)
+
+# Predicted Values without Intervention
+## Variables with no intervention
+newdata <- data.frame(int_deaths = 0, dt$time, dt$index_lag20, dt$daily_deaths_lag2)
+colnames(newdata) <- c("int_deaths", "time", "index_lag20", "daily_deaths_lag2")
+newdata$int_deaths <- as.factor(newdata$int_deaths)
+
+## Predicted values
+deaths_no_int <- predict(qpoi_deaths_model, type = "response", newdata)
+
+
+ggplot(dt, aes(time, daily_deaths)) +
+  geom_point() +
+  geom_line(aes(time, deaths_no_int, colour = "red")) +
+  geom_line(aes(time, deaths_int, colour = "blue")) +
+  geom_vline(aes(xintercept = time[day==two_levels+20]), 
+             linetype = "dashed") + 
+  theme(legend.position="bottom") +
+  scale_color_manual(values = c("blue",
+                                "red"),
+                     labels = c("Regression fitted values", 
+                                "Predicted values with no intervention")) +
+  scale_x_continuous(breaks = dt$time[grepl("01", dt$day, fixed = TRUE)],
+                     labels = labelos) +
+  labs(title = "Daily Deaths",
+       subtitle = "From August 30th to December 19th",
+       y = "Deaths",
+       x = "",
+       colour = "") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+
+
+## Model Check
+
+```{r}
+qpoi_residuals <- residuals(qpoi_deaths_model, type = "response")
+
+ggAcf(qpoi_residuals, lag.max = length(qpoi_residuals)) + 
+  ggtitle("ACF for QuasiPoisson Regression") + 
+  theme_classic() + labs(y = "")
+```
+
+```{r}
+# Ljung-Box test for autocorrelation
+Box.test(qpoi_residuals, lag = 9, type = "Ljung")
+Box.test(qpoi_residuals, lag = 16, type = "Ljung")
+```
+
+# Sensitive Analysis
+## Daily Diagnostics
+
+```{r}
+# Creating result dataframe
+sensetive_cases <- data.frame(lag = 7:17,
+                              int = NA,
+                              int_inf = NA,
+                              int_sup = NA,
+                              int_p_value = NA,
+                              time = NA,
+                              time_inf = NA,
+                              time_sup = NA,
+                              time_p_value = NA,
+                              slope = NA,
+                              slope_inf = NA,
+                              slope_sup = NA,
+                              slope_p_value = NA)
+
+for(x in 7:17){
+  # Modification of intervention variable
+  dt$int_cases <- as.numeric(as.character(dt$int_cases)) 
+  dt$int_cases <- 0 
+  dt$int_cases[dt$day>two_levels + x] <- 1
+  dt$int_cases <- as.factor(dt$int_cases)
+  
+  
+  # Refidining the model with new intervention day
+  covar <- matrix(c(as.numeric(as.character(dt$int_cases)),
+                    dt$time,
+                    as.numeric(as.character(dt$int_cases))*dt$time,
+                    log(dt$daily_testes_lag1, base = 10),
+                    harmonic(dt$week,3,7)), ncol = 10, nrow = nrow(dt))
+  
+  cases_ts <- ts(dt$daily_Diagnostics)
+  
+  
+  arima_model <- Arima(log(cases_ts, base = 10), xreg = covar, order = c(1,0,1), include.mean = F)
+  
+  # Retriving new parameter estimation and p-value
+  coefs <- coeftest(arima_model)
+  
+  ci <- confint(arima_model)
+  
+  sensetive_cases[sensetive_cases$lag==x,2] <- coefs[3,1]
+  sensetive_cases[sensetive_cases$lag==x,3] <- ci[3,1]
+  sensetive_cases[sensetive_cases$lag==x,4] <- ci[3,2]
+  sensetive_cases[sensetive_cases$lag==x,5] <- coefs[3,4]
+  sensetive_cases[sensetive_cases$lag==x,6] <- coefs[4,1]
+  sensetive_cases[sensetive_cases$lag==x,7] <- ci[4,1]
+  sensetive_cases[sensetive_cases$lag==x,8] <- ci[4,2]
+  sensetive_cases[sensetive_cases$lag==x,9] <- coefs[4,4]
+  sensetive_cases[sensetive_cases$lag==x,10] <- coefs[5,1]
+  sensetive_cases[sensetive_cases$lag==x,11] <- ci[5,1]
+  sensetive_cases[sensetive_cases$lag==x,12] <- ci[5,2]
+  sensetive_cases[sensetive_cases$lag==x,13] <- coefs[5,4]
+}
+
+sensetive_cases
+```
+
+## Daily Deaths
+
+```{r}
+
+sensitive_deaths <- data.frame(lag = 15:25,
+                               int = NA,
+                               int_inf = NA,
+                               int_sup = NA,
+                               int_p_value = NA,
+                               tempo = NA,
+                               tempo_inf = NA,
+                               tempo_sup = NA,
+                               tempo_p_value = NA,
+                               slope = NA,
+                               slope_inf = NA,
+                               slope_sup = NA,
+                               slope_p_value = NA)
+ 
+for(x in 15:25){
+  
+  # Modification of intervention variable
+  dt$int_deaths <- as.numeric(as.character(dt$int_deaths)) 
+  dt$int_deaths <- 0 
+  dt$int_deaths[dt$day>two_levels + x] <- 1
+  dt$int_deaths <- as.factor(dt$int_deaths)
+  
+  # Modification index variable for the correct lag
+  index <- index_complete %>% 
+          mutate(Date = ymd(Date)) %>%
+          filter(Entity == "Portugal") %>%
+          mutate(index_lag = Lag(stringency_index, x)) %>%
+          filter(Date >= start,
+                 Date < end) %>%
+          dplyr::select(index_lag)
+
+  # Refitiing the model
+   qpoi_deaths_model <- glm(daily_deaths ~ int_deaths + time + int_deaths*time + index$index_lag + daily_deaths_lag2, family = quasipoisson(), data = dt)
+
+  # Retriving new parameter estimation and p-value
+  coefs <- coeftest(qpoi_deaths_model)
+  
+  ci <- Confint(qpoi_deaths_model)
+
+  sensitive_deaths[sensitive_deaths$lag==x,2] <- coefs[2,1]
+  sensitive_deaths[sensitive_deaths$lag==x,3] <- ci[2,2]
+  sensitive_deaths[sensitive_deaths$lag==x,4] <- ci[2,3]
+  sensitive_deaths[sensitive_deaths$lag==x,5] <- coefs[2,4]
+  sensitive_deaths[sensitive_deaths$lag==x,6] <- coefs[3,1]
+  sensitive_deaths[sensitive_deaths$lag==x,7] <- ci[3,2]
+  sensitive_deaths[sensitive_deaths$lag==x,8] <- ci[3,3]
+  sensitive_deaths[sensitive_deaths$lag==x,9] <- coefs[3,4]
+  sensitive_deaths[sensitive_deaths$lag==x,10] <- coefs[6,1]
+  sensitive_deaths[sensitive_deaths$lag==x,11] <- ci[6,2]
+  sensitive_deaths[sensitive_deaths$lag==x,12] <- ci[6,3]
+  sensitive_deaths[sensitive_deaths$lag==x,13] <- coefs[4,4]
+}
+
+sensitive_deaths
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
